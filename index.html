@@ -562,6 +562,14 @@
     let historialAcciones = [];
     let nivelActivo = null;
 
+    // Estado para touch
+    let touchDragging = {
+        active: false,
+        source: null,
+        ghost: null,
+        currentDropZone: null,
+    };
+
     const dialogos = [
         {
             caracteres: ['你', '好', '！', '你', '叫', '什', '么', '名', '字', '？'],
@@ -583,19 +591,19 @@
         },
         {
             caracteres: ['我', '也', '很', '高', '兴', '，', '你', '是', '学', '生', '吗', '？'],
-            pinyin: ['wǒ', 'yě', 'hěn', 'gāo', 'xìng', '', 'nǐ', 'shì', 'xué', 'shēng', 'ma', ''],
+            pinyin: ['wǒ', 'yě', 'hěn', 'gāo', 'xìng', '', 'nǐ', 'shì', 'xué', 'sheng', 'ma', ''],
             traduccion: "Yo también estoy muy contenta, ¿eres estudiante?",
             orden: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         },
         {
             caracteres: ['是', '，', '我', '学', '习', '汉', '语', '，', '你', '呢', '？'],
-            pinyin: ['shì', '', 'wǒ', 'xué', 'xí', 'hàn', 'yǔ', '', 'nǐ', 'ne', ''],
+            pinyin: ['shì', '', 'wǒ', 'xué', 'xí', 'Hàn', 'yǔ', '', 'nǐ', 'ne', ''],
             traduccion: "Sí, estudio chino, ¿y tú?",
             orden: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         },
         {
             caracteres: ['我', '也', '是', '，', '也', '学', '中', '文'],
-            pinyin: ['wǒ', 'yě', 'shì', '', 'yě', 'xué', 'zhōng', 'wén'],
+            pinyin: ['wǒ', 'yě', 'shì', '', 'yě', 'xué', 'Zhōng', 'wén'],
             traduccion: "Yo también, también estudio chino",
             orden: [0, 1, 2, 3, 4, 5, 6, 7]
         }
@@ -670,8 +678,8 @@
         historialAcciones = [];
         actualizarBotonDeshacer();
 
-        const nivelActual = document.querySelector('.nivel.activo');
-        const nivelId = nivelActual.id;
+        const nivelActualEl = document.querySelector('.nivel.activo');
+        const nivelId = nivelActualEl.id;
 
         if (nivelId.startsWith('nivel-frase-')) {
             const indice = parseInt(nivelId.replace('nivel-frase-', ''));
@@ -903,6 +911,14 @@
             elemento.removeEventListener('dragend', handleDragEnd);
             elemento.addEventListener('dragstart', handleDragStart);
             elemento.addEventListener('dragend', handleDragEnd);
+
+            // Soporte táctil
+            elemento.removeEventListener('touchstart', handleTouchStart, {passive:false});
+            elemento.removeEventListener('touchmove', handleTouchMove, {passive:false});
+            elemento.removeEventListener('touchend', handleTouchEnd);
+            elemento.addEventListener('touchstart', handleTouchStart, {passive:false});
+            elemento.addEventListener('touchmove', handleTouchMove, {passive:false});
+            elemento.addEventListener('touchend', handleTouchEnd);
         });
 
         const pinyinSlots = document.querySelectorAll('.pinyin-slot');
@@ -911,6 +927,8 @@
             slot.removeEventListener('drop', handleDrop);
             slot.addEventListener('dragover', handleDragOver);
             slot.addEventListener('drop', handleDrop);
+
+            // Soporte táctil (no necesario listener aquí; detectamos con elementFromPoint)
         });
 
         const zonasFrase = document.querySelectorAll('.zona-frase, .dialogo-slot');
@@ -950,6 +968,12 @@
                 nivel: nivel,
                 caracter: this.dataset.caracter
             });
+
+            // Devolver al contenedor
+            contenedorCaracteres.appendChild(this);
+            // Rehabilitar drag y click
+            this.addEventListener('dragstart', handleDragStart);
+            this.addEventListener('dragend', handleDragEnd);
         });
     }
 
@@ -1042,6 +1066,137 @@
             });
         }
     }
+
+    // -------- Soporte táctil para tablets --------
+
+    function handleTouchStart(e) {
+        // Evitar scroll mientras arrastra
+        e.preventDefault();
+
+        const target = e.currentTarget;
+        touchDragging.active = true;
+        touchDragging.source = target;
+
+        // Simular dragstart
+        draggedItem = target;
+        target.style.opacity = '0.5';
+
+        // Crear un ghost para seguir el dedo
+        const rect = target.getBoundingClientRect();
+        const touch = e.touches[0];
+
+        const ghost = target.cloneNode(true);
+        ghost.style.position = 'fixed';
+        ghost.style.pointerEvents = 'none';
+        ghost.style.top = (touch.clientY - rect.height / 2) + 'px';
+        ghost.style.left = (touch.clientX - rect.width / 2) + 'px';
+        ghost.style.width = rect.width + 'px';
+        ghost.style.height = rect.height + 'px';
+        ghost.style.opacity = '0.7';
+        ghost.style.zIndex = '9999';
+        document.body.appendChild(ghost);
+        touchDragging.ghost = ghost;
+    }
+
+    function handleTouchMove(e) {
+        if (!touchDragging.active) return;
+        e.preventDefault();
+
+        const touch = e.touches[0];
+        // Mover ghost
+        if (touchDragging.ghost) {
+            const rect = touchDragging.ghost.getBoundingClientRect();
+            touchDragging.ghost.style.top = (touch.clientY - rect.height / 2) + 'px';
+            touchDragging.ghost.style.left = (touch.clientX - rect.width / 2) + 'px';
+        }
+
+        // Detectar zona de caída bajo el dedo
+        const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+        const dropZone = elem ? elem.closest('.pinyin-slot, .zona-frase, .dialogo-slot') : null;
+        touchDragging.currentDropZone = dropZone;
+    }
+
+    function handleTouchEnd(e) {
+        if (!touchDragging.active) return;
+        e.preventDefault();
+
+        // Quitar ghost y resetear estilo
+        if (touchDragging.ghost) {
+            document.body.removeChild(touchDragging.ghost);
+            touchDragging.ghost = null;
+        }
+        if (touchDragging.source) {
+            touchDragging.source.style.opacity = '1';
+        }
+
+        // Simular drop si hay zona válida
+        if (touchDragging.currentDropZone && draggedItem) {
+            simularDropTouch(touchDragging.currentDropZone, draggedItem);
+        }
+
+        // Reset
+        touchDragging.active = false;
+        touchDragging.source = null;
+        touchDragging.currentDropZone = null;
+        draggedItem = null;
+    }
+
+    function simularDropTouch(dropZone, item) {
+        if (!dropZone) return;
+
+        if (dropZone.classList.contains('pinyin-slot')) {
+            const pinyin = item.textContent;
+            const correctPinyin = dropZone.dataset.pinyin;
+
+            if (pinyin === correctPinyin && !dropZone.classList.contains('correcto')) {
+                dropZone.textContent = pinyin;
+                dropZone.classList.add('correcto');
+                item.style.visibility = 'hidden';
+                item.classList.add('usado');
+                
+                guardarAccion('pinyin_colocado', {
+                    indice: dropZone.dataset.indice,
+                    pinyin: pinyin
+                });
+            }
+        } else if (dropZone.classList.contains('zona-frase')) {
+            if (item.classList.contains('caracter-completo')) {
+                const clon = item.cloneNode(true);
+                dropZone.appendChild(clon);
+                clon.addEventListener('dragstart', handleDragStart);
+                clon.addEventListener('dragend', handleDragEnd);
+                // Soporte táctil para clon
+                clon.addEventListener('touchstart', handleTouchStart, {passive:false});
+                clon.addEventListener('touchmove', handleTouchMove, {passive:false});
+                clon.addEventListener('touchend', handleTouchEnd);
+                inicializarEventoClickCaracter(clon);
+                
+                const nivel = dropZone.id.match(/\d+/)[0];
+                guardarAccion('caracter_colocado', {
+                    nivel: nivel,
+                    caracter: item.dataset.caracter
+                });
+            }
+        } else if (dropZone.classList.contains('dialogo-slot')) {
+            // Si ya hay algo en el slot, devolverlo
+            if (dropZone.children.length > 0) {
+                const existente = dropZone.children[0];
+                document.getElementById('frases-disponibles').appendChild(existente);
+                existente.classList.remove('en-slot');
+            }
+            dropZone.innerHTML = '';
+            dropZone.appendChild(item);
+            dropZone.classList.add('lleno');
+            inicializarEventoClickDialogo(item);
+            
+            guardarAccion('dialogo_colocado', {
+                slotIndice: dropZone.dataset.indice,
+                dialogoIndice: item.dataset.indice
+            });
+        }
+    }
+
+    // ---------------------------------------------
 
     function verificarPinyin(indice) {
         const slots = document.querySelectorAll(`#nivel-${indice} .pinyin-slot`);
