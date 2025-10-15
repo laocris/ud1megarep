@@ -615,7 +615,7 @@
         }
     ];
 
-    // Función para guardar una acción en el historial
+       // Función para guardar una acción en el historial
     function guardarAccion(tipo, datos) {
         historialAcciones.push({
             tipo: tipo,
@@ -683,6 +683,7 @@
     function reiniciarNivel() {
         historialAcciones = [];
         actualizarBotonDeshacer();
+        limpiarSeleccionTap();
 
         const nivelActualEl = document.querySelector('.nivel.activo');
         const nivelId = nivelActualEl.id;
@@ -761,7 +762,7 @@
                 slot.dataset.pinyin = dialogo.pinyin[item.indiceOriginal];
                 slot.dataset.indice = item.indiceOriginal;
                 
-                // Añadir evento click para devolver pinyin
+                // Añadir evento click para devolver pinyin (si ya colocado)
                 slot.addEventListener('click', function() {
                     if (this.classList.contains('correcto')) {
                         const pinyin = this.textContent;
@@ -781,8 +782,16 @@
                             indice: item.indiceOriginal,
                             pinyin: pinyin
                         });
+                    } else {
+                        // Soporte tap-tap: si hay pinyin seleccionado, intentar colocarlo aquí
+                        if (tapState.selected && tapState.type === 'pinyin') {
+                            colocarPinyinTap(this, tapState.selected);
+                        }
                     }
                 });
+            } else {
+                // Si el slot no requiere pinyin, también podemos limpiar selección al tocar
+                slot.addEventListener('click', limpiarSeleccionTap);
             }
             
             box.appendChild(caracterDiv);
@@ -792,7 +801,7 @@
 
         // Crear pinyin arrastrables (solo únicos)
         const pinyinUnicos = new Set();
-        dialogo.pinyin.forEach((p, i) => {
+        dialogo.pinyin.forEach((p) => {
             if (p !== '') {
                 pinyinUnicos.add(p);
             }
@@ -805,6 +814,15 @@
             pinyinDiv.className = 'pinyin';
             pinyinDiv.draggable = true;
             pinyinDiv.textContent = pinyin;
+
+            // Tap para seleccionar
+            pinyinDiv.addEventListener('click', function(e) {
+                e.stopPropagation();
+                // Si ya está usado y oculto, ignorar
+                if (this.classList.contains('usado') || this.style.visibility === 'hidden') return;
+                seleccionarTap(this, 'pinyin');
+            });
+
             contenedorPinyin.appendChild(pinyinDiv);
         });
 
@@ -894,7 +912,6 @@
             const hanzi = document.createElement('span');
             hanzi.className = 'hanzi';
             hanzi.textContent = item.caracter;
-            
             div.appendChild(hanzi);
             
             if (dialogo.pinyin[item.indiceOriginal]) {
@@ -903,8 +920,37 @@
                 pinyin.textContent = dialogo.pinyin[item.indiceOriginal];
                 div.appendChild(pinyin);
             }
+
+            // Tap para seleccionar el carácter
+            div.addEventListener('click', function(e) {
+                e.stopPropagation();
+                seleccionarTap(this, 'caracter');
+            });
             
             contenedorCaracteres.appendChild(div);
+        });
+
+        // Tap en zona de frase para soltar carácter seleccionado
+        zonaFrase.addEventListener('click', function() {
+            if (tapState.selected && tapState.type === 'caracter') {
+                const item = tapState.selected;
+                const clon = item.cloneNode(true);
+                this.appendChild(clon);
+                clon.addEventListener('dragstart', handleDragStart);
+                clon.addEventListener('dragend', handleDragEnd);
+                clon.addEventListener('click', function() {
+                    const zona = this.parentElement;
+                    const nivel = zona.id.match(/\d+/)[0];
+                    zona.removeChild(this);
+                    guardarAccion('caracter_devuelto', { nivel, caracter: item.dataset.caracter });
+                });
+                const nivel = this.id.match(/\d+/)[0];
+                guardarAccion('caracter_colocado', {
+                    nivel: nivel,
+                    caracter: item.dataset.caracter
+                });
+                limpiarSeleccionTap();
+            }
         });
 
         inicializarEventosArrastre();
@@ -925,6 +971,14 @@
             elemento.addEventListener('touchstart', handleTouchStart, {passive:false});
             elemento.addEventListener('touchmove', handleTouchMove, {passive:false});
             elemento.addEventListener('touchend', handleTouchEnd);
+
+            // Para tap-tap en frases del diálogo (frases disponibles)
+            if (elemento.classList.contains('dialogo-item')) {
+                elemento.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    seleccionarTap(this, 'dialogo');
+                });
+            }
         });
 
         const pinyinSlots = document.querySelectorAll('.pinyin-slot');
@@ -934,18 +988,37 @@
             slot.addEventListener('dragover', handleDragOver);
             slot.addEventListener('drop', handleDrop);
 
-            // Soporte táctil (no necesario listener aquí; detectamos con elementFromPoint)
+            // Para tap-tap, el click ya se añadió al crearlos
         });
 
-        const zonasFrase = document.querySelectorAll('.zona-frase, .dialogo-slot');
+        const zonasFrase = document.querySelectorAll('.zona-frase');
         zonasFrase.forEach(zona => {
             zona.removeEventListener('dragover', handleDragOver);
             zona.removeEventListener('drop', handleDrop);
             zona.addEventListener('dragover', handleDragOver);
             zona.addEventListener('drop', handleDrop);
+            // Tap en inicializarFrase añade el click para soltar carácter
         });
 
-        // Añadir eventos de click para devolver elementos
+        const dialogoSlots = document.querySelectorAll('.dialogo-slot');
+        dialogoSlots.forEach(slot => {
+            slot.removeEventListener('dragover', handleDragOver);
+            slot.removeEventListener('drop', handleDrop);
+            slot.addEventListener('dragover', handleDragOver);
+            slot.addEventListener('drop', handleDrop);
+
+            // Tap-tap: tocar un slot coloca la frase seleccionada
+            slot.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (tapState.selected && tapState.type === 'dialogo') {
+                    colocarDialogoTap(this, tapState.selected);
+                } else {
+                    limpiarSeleccionTap();
+                }
+            });
+        });
+
+        // Añadir eventos de click para devolver elementos ya colocados
         const caracteresEnZona = document.querySelectorAll('.zona-frase .caracter-completo');
         caracteresEnZona.forEach(caracter => {
             inicializarEventoClickCaracter(caracter);
@@ -955,29 +1028,25 @@
         dialogosEnSlot.forEach(dialogo => {
             inicializarEventoClickDialogo(dialogo);
         });
+
+        // Limpiar selección global al tocar fuera
+        document.body.addEventListener('click', onBodyTapToClear, { passive: true });
     }
 
     function inicializarEventoClickCaracter(elemento) {
         elemento.classList.add('colocado');
-        elemento.addEventListener('click', function() {
+        elemento.addEventListener('click', function(e) {
+            e.stopPropagation();
             const zonaFrase = this.parentElement;
             const nivel = zonaFrase.id.match(/\d+/)[0];
             const contenedorCaracteres = document.getElementById(`caracteres-desordenados-${nivel}`);
-            
-            // Remover del zona de frase
             zonaFrase.removeChild(this);
-            
-            // Quitar clase colocado
             this.classList.remove('colocado');
-            
             guardarAccion('caracter_devuelto', {
                 nivel: nivel,
                 caracter: this.dataset.caracter
             });
-
-            // Devolver al contenedor
             contenedorCaracteres.appendChild(this);
-            // Rehabilitar drag y click
             this.addEventListener('dragstart', handleDragStart);
             this.addEventListener('dragend', handleDragEnd);
         });
@@ -985,21 +1054,17 @@
 
     function inicializarEventoClickDialogo(elemento) {
         elemento.classList.add('en-slot');
-        elemento.addEventListener('click', function() {
+        elemento.addEventListener('click', function(e) {
+            e.stopPropagation();
             if (this.classList.contains('en-slot')) {
                 const slot = this.parentElement;
                 const contenedorFrases = document.getElementById('frases-disponibles');
-                
-                // Devolver al contenedor de frases
                 contenedorFrases.appendChild(this);
                 slot.classList.remove('lleno');
                 this.classList.remove('en-slot');
-                
                 guardarAccion('dialogo_devuelto', {
                     indice: this.dataset.indice
                 });
-                
-                // Re-inicializar eventos
                 inicializarEventosArrastre();
             }
         });
@@ -1008,6 +1073,7 @@
     function handleDragStart(e) {
         draggedItem = e.target;
         e.target.style.opacity = '0.5';
+        limpiarSeleccionTap(); // si se usa drag, quita selección tap
     }
 
     function handleDragEnd(e) {
@@ -1021,7 +1087,6 @@
     function handleDrop(e) {
         e.preventDefault();
         const dropZone = e.target.closest('.pinyin-slot, .zona-frase, .dialogo-slot');
-        
         if (!dropZone) return;
 
         if (dropZone.classList.contains('pinyin-slot')) {
@@ -1073,7 +1138,7 @@
         }
     }
 
-    // -------- Soporte táctil para tablets --------
+    // -------- Soporte táctil (drag) para tablets --------
 
     function handleTouchStart(e) {
         // Evitar scroll mientras arrastra
@@ -1086,6 +1151,7 @@
         // Simular dragstart
         draggedItem = target;
         target.style.opacity = '0.5';
+        limpiarSeleccionTap();
 
         // Crear un ghost para seguir el dedo
         const rect = target.getBoundingClientRect();
@@ -1171,7 +1237,6 @@
                 dropZone.appendChild(clon);
                 clon.addEventListener('dragstart', handleDragStart);
                 clon.addEventListener('dragend', handleDragEnd);
-                // Soporte táctil para clon
                 clon.addEventListener('touchstart', handleTouchStart, {passive:false});
                 clon.addEventListener('touchmove', handleTouchMove, {passive:false});
                 clon.addEventListener('touchend', handleTouchEnd);
@@ -1200,6 +1265,69 @@
                 dialogoIndice: item.dataset.indice
             });
         }
+    }
+
+    // --------- Tap-Tap helpers ---------
+
+    function seleccionarTap(el, type) {
+        // Si ya estaba seleccionado, deseleccionar
+        if (tapState.selected === el) {
+            limpiarSeleccionTap();
+            return;
+        }
+        limpiarSeleccionTap();
+        tapState.selected = el;
+        tapState.type = type;
+        // Señal visual mínima sin tocar CSS: borde inline
+        el.dataset.prevOutline = el.style.outline || '';
+        el.style.outline = '2px solid #1e90ff';
+    }
+
+    function limpiarSeleccionTap() {
+        if (tapState.selected) {
+            tapState.selected.style.outline = tapState.selected.dataset.prevOutline || '';
+        }
+        tapState.selected = null;
+        tapState.type = null;
+    }
+
+    function colocarPinyinTap(slot, pinyinEl) {
+        const pinyin = pinyinEl.textContent;
+        const correctPinyin = slot.dataset.pinyin;
+        if (pinyin === correctPinyin && !slot.classList.contains('correcto')) {
+            slot.textContent = pinyin;
+            slot.classList.add('correcto');
+            pinyinEl.style.visibility = 'hidden';
+            pinyinEl.classList.add('usado');
+            guardarAccion('pinyin_colocado', {
+                indice: slot.dataset.indice,
+                pinyin: pinyin
+            });
+            limpiarSeleccionTap();
+        }
+    }
+
+    function colocarDialogoTap(slot, dialogoItem) {
+        // Si ya hay algo en el slot, devolverlo
+        if (slot.children.length > 0) {
+            const existente = slot.children[0];
+            document.getElementById('frases-disponibles').appendChild(existente);
+            existente.classList.remove('en-slot');
+        }
+        slot.innerHTML = '';
+        slot.appendChild(dialogoItem);
+        slot.classList.add('lleno');
+        inicializarEventoClickDialogo(dialogoItem);
+        guardarAccion('dialogo_colocado', {
+            slotIndice: slot.dataset.indice,
+            dialogoIndice: dialogoItem.dataset.indice
+        });
+        limpiarSeleccionTap();
+    }
+
+    function onBodyTapToClear() {
+        // Tocar fuera limpia selección
+        limpiarSeleccionTap();
     }
 
     // ---------------------------------------------
@@ -1317,6 +1445,12 @@
             item.appendChild(texto);
             item.appendChild(traduccion);
             contenedorFrases.appendChild(item);
+
+            // Tap para seleccionar frase disponible
+            item.addEventListener('click', function(e) {
+                e.stopPropagation();
+                seleccionarTap(this, 'dialogo');
+            });
         });
 
         inicializarEventosArrastre();
